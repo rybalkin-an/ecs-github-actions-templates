@@ -1,0 +1,17 @@
+name: ECS Wait Stable
+description: Wait until ECS service is stable
+inputs:
+  cluster:
+    required: true
+  service:
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Wait for service to stabilize
+      shell: bash
+      run: |
+        aws ecs wait services-stable \
+          --cluster "${{ inputs.cluster }}" \
+          --services "${{ inputs.service }}"

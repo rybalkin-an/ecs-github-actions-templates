@@ -1,0 +1,48 @@
+name: Scale ECS Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      desired_count:
+        description: "Desired count"
+        required: true
+        default: "1"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+
+jobs:
+  scale:
+    runs-on: ubuntu-latest
+    environment: AWS
+
+    steps:
+      - uses: ./.github/actions/aws_oidc_auth
+        with:
+          aws_region: ${{ env.AWS_REGION }}
+          role_arn: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Scale
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --desired-count "${{ inputs.desired_count }}"
+
+      - uses: ./.github/actions/ecs_wait_stable
+        with:
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+
+      - name: Summary
+        run: |
+          {
+            echo "## ECS Scale"
+            echo "- Desired count: \`${{ inputs.desired_count }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

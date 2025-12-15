@@ -1,0 +1,64 @@
+name: Undeploy / Delete ECS Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      delete_service:
+        description: "Delete the ECS service after scaling to zero (true/false)"
+        required: true
+        default: "false"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+
+jobs:
+  undeploy:
+    runs-on: ubuntu-latest
+    environment: AWS
+
+    steps:
+      - uses: ./.github/actions/aws_oidc_auth
+        with:
+          aws_region: ${{ env.AWS_REGION }}
+          role_arn: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Scale service to zero
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --desired-count 0
+
+      - uses: ./.github/actions/ecs_wait_stable
+        with:
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+
+      - name: Delete ECS service (optional)
+        if: ${{ inputs.delete_service == 'true' }}
+        run: |
+          aws ecs delete-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force
+
+      - name: Final summary
+        shell: bash
+        run: |
+          {
+            echo "## ECS Undeploy"
+            echo ""
+            echo "- Cluster: \`$ECS_CLUSTER\`"
+            echo "- Service: \`$ECS_SERVICE\`"
+            if [[ "${{ inputs.delete_service }}" == "true" ]]; then
+              echo "- Result: **deleted**"
+            else
+              echo "- Result: **scaled to 0**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

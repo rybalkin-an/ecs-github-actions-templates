@@ -1,0 +1,69 @@
+name: Deploy to ECS (Fargate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Full image ref (e.g. ghcr.io/<owner>/<repo>:tag or @sha256:...)"
+        required: true
+      task_def_path:
+        description: "Path to task definition template JSON"
+        required: true
+        default: ".aws/task-definition.json"
+      container_name:
+        description: "Container name in task definition to update"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: ecs-deploy-${{ secrets.ECS_CLUSTER }}-${{ secrets.ECS_SERVICE }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: AWS
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/aws_oidc_auth
+        with:
+          aws_region: ${{ env.AWS_REGION }}
+          role_arn: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Render task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ inputs.task_def_path }}
+          container-name: ${{ inputs.container_name }}
+          image: ${{ inputs.image }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## ECS Deploy"
+            echo ""
+            echo "- Region: \`${AWS_REGION}\`"
+            echo "- Cluster: \`${ECS_CLUSTER}\`"
+            echo "- Service: \`${ECS_SERVICE}\`"
+            echo "- Image: \`${{ inputs.image }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
