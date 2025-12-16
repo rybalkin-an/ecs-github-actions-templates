@@ -1,0 +1,113 @@
+name: Create or Update ECS Service (Fargate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_definition:
+        description: "Task definition ARN or family:revision to run"
+        required: true
+      desired_count:
+        description: "Desired count"
+        required: true
+        default: "1"
+      subnets:
+        description: "Comma-separated subnet ids"
+        required: true
+      security_groups:
+        description: "Comma-separated security group ids"
+        required: true
+      assign_public_ip:
+        description: "ENABLED or DISABLED"
+        required: true
+        default: "DISABLED"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+
+jobs:
+  upsert:
+    runs-on: ubuntu-latest
+    environment: AWS
+
+    steps:
+      - uses: ./.github/actions/aws_oidc_auth
+        with:
+          aws_region: ${{ env.AWS_REGION }}
+          role_arn: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Build network configuration
+        id: net
+        shell: bash
+        run: |
+          set -euo pipefail
+          NETCONF=$(jq -n \
+            --arg subnets "${{ inputs.subnets }}" \
+            --arg sgs "${{ inputs.security_groups }}" \
+            --arg apip "${{ inputs.assign_public_ip }}" \
+            '{awsvpcConfiguration:{
+              subnets: ($subnets|split(",")),
+              securityGroups: ($sgs|split(",")),
+              assignPublicIp: $apip
+            }}')
+          echo "netconf=$NETCONF" >> "$GITHUB_OUTPUT"
+
+      - name: Check if service exists
+        id: exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE")
+          STATUS=$(echo "$OUT" | jq -r '.services[0].status // empty')
+          if [[ "$STATUS" == "ACTIVE" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create service (if missing)
+        if: ${{ steps.exists.outputs.exists != 'true' }}
+        shell: bash
+        run: |
+          aws ecs create-service \
+            --cluster "$ECS_CLUSTER" \
+            --service-name "$ECS_SERVICE" \
+            --launch-type FARGATE \
+            --task-definition "${{ inputs.task_definition }}" \
+            --desired-count "${{ inputs.desired_count }}" \
+            --network-configuration '${{ steps.net.outputs.netconf }}' \
+            --enable-execute-command
+
+      - name: Update service (if exists)
+        if: ${{ steps.exists.outputs.exists == 'true' }}
+        shell: bash
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "${{ inputs.task_definition }}" \
+            --desired-count "${{ inputs.desired_count }}" \
+            --network-configuration '${{ steps.net.outputs.netconf }}' \
+            --enable-execute-command
+
+      - name: Wait stable
+        uses: ./.github/actions/ecs_wait_stable
+        with:
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## ECS Service Upsert"
+            echo "- Cluster: \`$ECS_CLUSTER\`"
+            echo "- Service: \`$ECS_SERVICE\`"
+            echo "- Task definition: \`${{ inputs.task_definition }}\`"
+            echo "- Desired count: \`${{ inputs.desired_count }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
