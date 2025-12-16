@@ -18,10 +18,6 @@ permissions:
   id-token: write
   contents: read
 
-concurrency:
-  group: ecs-deploy-${{ secrets.ECS_CLUSTER }}-${{ secrets.ECS_SERVICE }}
-  cancel-in-progress: false
-
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
@@ -30,7 +26,10 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: AWS
+#    environment: AWS
+    concurrency:
+      group: ecs-deploy-${{ github.repository }}-${{ env.ECS_CLUSTER }}-${{ env.ECS_SERVICE }}
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v5

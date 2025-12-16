@@ -35,7 +35,14 @@ jobs:
     runs-on: ubuntu-latest
     environment: AWS
 
+    concurrency:
+      group: ecs-upsert-${{ github.repository }}-${{ env.ECS_CLUSTER }}-${{ env.ECS_SERVICE }}
+      cancel-in-progress: false
+
     steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - uses: ./.github/actions/aws_oidc_auth
         with:
           aws_region: ${{ env.AWS_REGION }}
@@ -51,8 +58,8 @@ jobs:
             --arg sgs "${{ inputs.security_groups }}" \
             --arg apip "${{ inputs.assign_public_ip }}" \
             '{awsvpcConfiguration:{
-              subnets: ($subnets|split(",")),
-              securityGroups: ($sgs|split(",")),
+              subnets: ($subnets|split(",")|map(gsub("^\\s+|\\s+$";""))),
+              securityGroups: ($sgs|split(",")|map(gsub("^\\s+|\\s+$";""))),
               assignPublicIp: $apip
             }}')
           echo "netconf=$NETCONF" >> "$GITHUB_OUTPUT"
@@ -89,25 +96,3 @@ jobs:
         run: |
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
-            --task-definition "${{ inputs.task_definition }}" \
-            --desired-count "${{ inputs.desired_count }}" \
-            --network-configuration '${{ steps.net.outputs.netconf }}' \
-            --enable-execute-command
-
-      - name: Wait stable
-        uses: ./.github/actions/ecs_wait_stable
-        with:
-          cluster: ${{ env.ECS_CLUSTER }}
-          service: ${{ env.ECS_SERVICE }}
-
-      - name: Summary
-        shell: bash
-        run: |
-          {
-            echo "## ECS Service Upsert"
-            echo "- Cluster: \`$ECS_CLUSTER\`"
-            echo "- Service: \`$ECS_SERVICE\`"
-            echo "- Task definition: \`${{ inputs.task_definition }}\`"
-            echo "- Desired count: \`${{ inputs.desired_count }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
